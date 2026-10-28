@@ -260,7 +260,12 @@ has build recipes for essentially every registered system). Full guide:
 7. **Test locally**, then via `scripts/test_submit.sh <code> <line_number>`
    (see above), then open a PR. **Commit message must include
    `[code:<code>]`** so CI scopes itself to just the new app; PR title
-   convention is `Add new application: <code>`.
+   convention is `Add new application: <code>`. **Every commit also needs
+   a DCO `Signed-off-by:` trailer** (`git commit -s`, or `-s` folded into
+   whatever committing habit/alias you already use) — the `DCO` check is a
+   separate required status from the app/lint/test checks above and fails
+   the whole PR on its own. See the gotcha below for what to do when you
+   notice a commit is missing it *after* pushing.
 
 ## Contributing a new site (target system)
 
@@ -423,3 +428,22 @@ maintainers rather than assuming it belongs on FNCX.
   reference `${cpu_per_node}`/`${gpu_per_node}` from it.
 - **PR commit messages need a `[code:<code>]` tag** to scope CI to the
   relevant app instead of running the full matrix.
+- **A missing DCO trailer cannot be patched with a follow-up commit.**
+  The `DCO` check (a probot app, separate from this repo's own CI) reads
+  the `Signed-off-by:` trailer on *each* commit in the PR, not just
+  somewhere in the branch's history — an empty commit added on top that
+  carries the trailer still leaves the original commit failing, and the
+  check stays red. Fixing it for real means rewriting the offending
+  commit(s)' own messages and force-pushing:
+  ```sh
+  # one bad commit at the tip
+  git commit --amend --no-edit -s
+  # several bad commits in a row, back to (but not including) <base>
+  git rebase --exec "git commit --amend --no-edit -s" <base>
+  git push --force-with-lease
+  ```
+  This rewrites history already on the remote, so treat it like any other
+  force-push: confirm before doing it on a shared branch, and know which
+  commits in the range already had the trailer before you blanket-amend
+  (unrelated commits already carrying one don't break from a second
+  `-s`, but check first rather than assuming).
