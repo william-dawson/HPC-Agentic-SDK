@@ -203,12 +203,33 @@ has build recipes for essentially every registered system). Full guide:
      --nthreads "$nthreads" >> results/result
    ```
    Verify success by grepping the application's own log output for a
-   real completion marker — **not** just the launcher's exit code. A
+   real completion marker — **not only** the launcher's exit code. A
    nonzero-but-silent-failure app can still return 0 from `mpiexec`;
    BenchKit's own convention (see `programs/salmon/run.sh` for a worked
    example) is to touch a marker file before the run, then check either
    the log or any output file newer than the marker for the expected
    success string before calling `bk_emit_result`.
+
+   The reverse mistake is just as real and has shipped twice: **never
+   discard the launcher's own exit status to get past it to the marker
+   check.** `bk_run` (used by `programs/salmon/run.sh` above) already
+   returns the launcher's real exit status, and `set -euo pipefail` then
+   fails the script immediately on a bad run — no `|| true` needed, and
+   none should be added. If your launch doesn't fit `bk_run` (a custom
+   multi-process launcher like `torchrun`/`mpiexec` with its own per-rank
+   logs), capture the status explicitly instead of swallowing it:
+   ```sh
+   status=0
+   torchrun ... > "$logfile" 2>&1 || status=$?
+   if [ "$status" -ne 0 ] || ! grep -q "Training Complete" "$logfile"; then
+     echo "run failed (exit $status, or no success marker)" >&2
+     exit 1
+   fi
+   ```
+   A bare `|| true` on the launcher means a crashed rank that still lets
+   the launcher exit 0, or a log that reaches its completion marker before
+   a later teardown failure, both pass silently if the marker check is the
+   only thing left standing. Require both conditions, not either one.
 
 5. **Result-line format** — what `bk_emit_result`/`bk_emit_section`/
    `bk_emit_overlap` (all in `scripts/bk_functions.sh`) append to
@@ -372,11 +393,20 @@ maintainers rather than assuming it belongs on FNCX.
   commented-out CSV row is easy to miss when `matrix_generate.sh` parses
   the file; `enable=no` is the explicit, grep-able way to keep a
   known-broken system/app combination out of CI without deleting the row.
-- **Don't call a run successful just because the launcher exited 0.** Many
-  HPC apps can silently produce garbage output (or hang and get killed by
-  the scheduler with a misleading exit code) without the launcher itself
-  reporting failure. Grep the app's actual log for a real completion
-  marker before emitting a result — see `run.sh`'s pattern above.
+- **Don't call a run successful just because the launcher exited 0, and
+  don't call it successful just because a completion marker is in the
+  log, either — require both.** Many HPC apps can silently produce
+  garbage output (or hang and get killed by the scheduler with a
+  misleading exit code) without the launcher itself reporting failure,
+  which is why the marker check exists. But a hand-rolled launch that
+  swallows the launcher's exit status (`... || true`) to reach that same
+  marker check reopens the hole from the other side: a crashed rank can
+  still let the launcher exit 0, and some apps keep writing to the log
+  (closing datasets, tearing down the process group) after the
+  completion line, so a later failure there also goes unnoticed. Two
+  real app PRs shipped exactly this bug. See `run.sh`'s pattern above —
+  `bk_run` already propagates the real exit status; a custom launch must
+  capture it itself (`|| status=$?`) and check it alongside the marker.
 - **Prefer `bk_fetch_source` to raw `git clone`.** It creates normalized
   top-level source provenance and supports explicit commit/archive-digest
   pinning when reproducibility requires it. Do not claim provenance for
